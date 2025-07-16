@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { default: Stripe } = require("stripe");
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -31,7 +33,7 @@ async function run() {
     // await client.connect();
     const usersCollection = client.db("medical").collection("users");
     const campCollection = client.db("medical").collection("camp");
-    const campParticipantsCollection = client
+    const participantsCollection = client
       .db("medical")
       .collection("participant");
     app.post("/users", async (req, res) => {
@@ -157,7 +159,7 @@ async function run() {
         }
 
         // 1️⃣ Save to campParticipants collection
-        const insertResult = await campParticipantsCollection.insertOne(data);
+        const insertResult = await participantsCollection.insertOne(data);
 
         // 2️⃣ Increase participant_count in campCollection
         const updateResult = await campCollection.updateOne(
@@ -174,6 +176,59 @@ async function run() {
         console.error("❌ Error in /campParticipants POST:", error);
         res.status(500).send({ message: "Internal Server Error" });
       }
+    });
+
+    app.get("/campParticipants/:participantId", async (req, res) => {
+      const id = req.params.participantId;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ error: "Invalid participant ID" });
+      }
+
+      try {
+        const participant = await participantsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!participant) {
+          return res.status(404).send({ error: "Participant not found" });
+        }
+
+        res.send(participant);
+      } catch (err) {
+        console.error("Error fetching participant:", err);
+        res.status(500).send({ error: "Server error" });
+      }
+    });
+
+    app.get("/registered-camps", async (req, res) => {
+      try {
+        const result = await participantsCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching participants:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    app.patch("/confirm-registration/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const result = await participantsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { confirmationStatus: "Confirmed" } }
+      );
+
+      res.send(result);
+    });
+
+    app.delete("/cancel-registration/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const result = await participantsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
     });
 
     // ✅ Add a new camp
@@ -205,7 +260,6 @@ async function run() {
       const result = await campCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
-
 
     app.patch("/update-camp/:id", async (req, res) => {
       const campId = req.params.id;
@@ -248,6 +302,29 @@ async function run() {
           success: false,
           message: "Server error while updating camp",
         });
+      }
+    });
+
+    app.post("/create-payment-intent", async (req, res) => {
+      const { amountInCents } = req.body;
+
+      if (!amountInCents) {
+        return res.status(400).send({ error: "Amount is required" });
+      }
+
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amountInCents,
+          currency: "bdt", // বাংলাদেশ টাকার জন্য
+          payment_method_types: ["card"],
+        });
+
+        res.send({
+          clientSecret: paymentIntent.client_secret,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Failed to create payment intent" });
       }
     });
 
