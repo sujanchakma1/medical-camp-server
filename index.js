@@ -83,6 +83,7 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
+  
 
     // server/routes/users.js
     app.patch("/users", async (req, res) => {
@@ -228,7 +229,7 @@ async function run() {
 
       const result = await participantsCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: { confirmationStatus: "Confirmed" } }
+        { $set: { confirmation_status: "Confirmed" } }
       );
 
       res.send(result);
