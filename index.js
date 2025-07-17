@@ -1,12 +1,11 @@
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const { default: Stripe } = require("stripe");
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const port = process.env.PORT || 3000;
 require("dotenv").config();
+const stripe = require("stripe")(`${process.env.STRIPE_SECRET_KEY}`);
 
 // middleware
 app.use(cors());
@@ -36,6 +35,9 @@ async function run() {
     const participantsCollection = client
       .db("medical")
       .collection("participant");
+    const paymentCollection = client.db("medical").collection("payment");
+    const feedbackCollection = client.db("medical").collection("feedback");
+
     app.post("/users", async (req, res) => {
       try {
         const user = req.body;
@@ -147,7 +149,7 @@ async function run() {
     });
 
     // campParticipants collection
-    app.post("/campParticipants", async (req, res) => {
+    app.post("/participant", async (req, res) => {
       try {
         const data = req.body;
 
@@ -178,7 +180,7 @@ async function run() {
       }
     });
 
-    app.get("/campParticipants/:participantId", async (req, res) => {
+    app.get("/participant/:participantId", async (req, res) => {
       const id = req.params.participantId;
 
       if (!ObjectId.isValid(id)) {
@@ -209,6 +211,16 @@ async function run() {
         console.error("Error fetching participants:", error);
         res.status(500).send({ message: "Internal Server Error" });
       }
+    });
+    app.get("/participants", async (req, res) => {
+      const email = req.query.email;
+      if (!email) {
+        return res.status(400).send({ error: "Email is required" });
+      }
+      const result = await participantsCollection
+        .find({ participant_email: email })
+        .toArray();
+      res.send(result);
     });
 
     app.patch("/confirm-registration/:id", async (req, res) => {
@@ -306,25 +318,66 @@ async function run() {
     });
 
     app.post("/create-payment-intent", async (req, res) => {
-      const { amountInCents } = req.body;
-
-      if (!amountInCents) {
-        return res.status(400).send({ error: "Amount is required" });
-      }
-
+      const amountInCents = req.body.amountInCents;
       try {
         const paymentIntent = await stripe.paymentIntents.create({
           amount: amountInCents,
-          currency: "bdt", // বাংলাদেশ টাকার জন্য
-          payment_method_types: ["card"],
+          currency: "usd",
+          automatic_payment_methods: { enabled: true },
         });
-
-        res.send({
-          clientSecret: paymentIntent.client_secret,
-        });
+        res.json({ clientSecret: paymentIntent.client_secret });
       } catch (error) {
-        console.error(error);
-        res.status(500).send({ error: "Failed to create payment intent" });
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.post("/payments", async (req, res) => {
+      try {
+        const { participantId, email, amount, paymentMethod, transactionId } =
+          req.body;
+        const paymentData = {
+          participantId,
+          email,
+          amount,
+          paymentMethod,
+          transactionId,
+          paid_at_string: new Date().toISOString(),
+          paid_at: new Date(),
+        };
+
+        // Insert payment info
+        const paymentResult = await paymentCollection.insertOne(paymentData);
+
+        // Update camp's payment_status
+        const campResult = await participantsCollection.updateOne(
+          { _id: new ObjectId(participantId) },
+          { $set: { payment_status: "Paid" } }
+        );
+
+        res.send(paymentResult);
+      } catch (error) {
+        console.error("Payment save failed:", error);
+        res.status(500).send({ error: "Payment processing failed" });
+      }
+    });
+
+    // FeedBack
+    app.post("/feedback", async (req, res) => {
+      const feedback = req.body;
+      const result = await feedbackCollection.insertOne(feedback);
+      res.send(result);
+    });
+
+    // GET all feedbacks
+    app.get("/feedback", async (req, res) => {
+      try {
+        const result = await feedbackCollection
+          .find()
+          .sort({ date: -1 })
+          .toArray();
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to load feedbacks" });
       }
     });
 
