@@ -110,13 +110,16 @@ async function run() {
     });
 
     app.get("/camps", async (req, res) => {
-      try {
-        const camps = await campCollection.find().toArray();
-        res.send(camps);
-      } catch (error) {
-        console.error("Error fetching camps:", error);
-        res.status(500).send({ message: "Internal Server Error" });
-      }
+      const search = req.query.search?.toLowerCase() || "";
+      const query = {
+        $or: [
+          { camp_name: { $regex: search, $options: "i" } },
+          { date_time: { $regex: search, $options: "i" } },
+          { healthcare_professional: { $regex: search, $options: "i" } },
+        ],
+      };
+      const result = await campCollection.find(search ? query : {}).toArray();
+      res.send(result);
     });
 
     app.get("/camps/:id", async (req, res) => {
@@ -204,14 +207,14 @@ async function run() {
     });
 
     app.get("/registered-camps", async (req, res) => {
-      try {
-        const result = await participantsCollection.find().toArray();
-        res.send(result);
-      } catch (error) {
-        console.error("Error fetching participants:", error);
-        res.status(500).send({ message: "Internal Server Error" });
-      }
+      const campName = req.query.camp_name?.toLowerCase() || "";
+      const query = campName
+        ? { camp_name: { $regex: campName, $options: "i" } }
+        : {};
+      const result = await participantsCollection.find(query).toArray();
+      res.send(result);
     });
+
     app.get("/participants", async (req, res) => {
       const email = req.query.email;
       if (!email) {
@@ -406,6 +409,69 @@ async function run() {
         res.send(result);
       } catch (err) {
         res.status(500).send({ message: "Failed to load feedbacks" });
+      }
+    });
+
+    // server-side (Node.js + Express)
+    app.get("/admin-stats", async (req, res) => {
+      const totalCamps = await campCollection.estimatedDocumentCount();
+      const totalParticipants =
+        await participantsCollection.estimatedDocumentCount();
+      const payments = await paymentCollection.find().toArray();
+
+      const totalPayments = payments.reduce(
+        (sum, item) => sum + parseFloat(item.amount),
+        0
+      );
+
+      const recentParticipants = await participantsCollection
+        .find({})
+        .sort({ date: -1 })
+        .limit(5)
+        .toArray();
+
+      res.send({
+        totalCamps,
+        totalParticipants,
+        totalPayments,
+        recentParticipants,
+      });
+    });
+
+    // Add this in your Express backend route file
+
+    app.get("/user-stats", async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        const totalRegisteredCamps =
+          await participantsCollection.countDocuments({
+            participant_email: email,
+          });
+
+        const confirmedCamps = await participantsCollection.countDocuments({
+          participant_email: email,
+          confirmation_status: "Confirmed",
+        });
+        console.log(req.query.email)
+
+        // Fix: Remove unnecessary projection, safely parse amount
+        const payments = await paymentCollection.find({email}).toArray();
+
+        const totalPaidAmount = payments.reduce(
+          (sum, item) => sum + parseFloat(item.amount),
+          0
+        );
+
+        res.send({
+          totalRegisteredCamps,
+          confirmedCamps,
+          totalPaidAmount,
+        });
+      } catch (err) {
+        res
+          .status(500)
+          .send({ message: "Failed to load user stats", error: err });
       }
     });
 
