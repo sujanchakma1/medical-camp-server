@@ -453,20 +453,11 @@ async function run() {
           participant_email: email,
           confirmation_status: "Confirmed",
         });
-        console.log(req.query.email)
-
-        // Fix: Remove unnecessary projection, safely parse amount
-        const payments = await paymentCollection.find({email}).toArray();
-
-        const totalPaidAmount = payments.reduce(
-          (sum, item) => sum + parseFloat(item.amount),
-          0
-        );
+       
 
         res.send({
           totalRegisteredCamps,
           confirmedCamps,
-          totalPaidAmount,
         });
       } catch (err) {
         res
