@@ -83,7 +83,6 @@ async function run() {
         res.status(500).send({ message: "Internal server error" });
       }
     });
-  
 
     // server/routes/users.js
     app.patch("/users", async (req, res) => {
@@ -238,10 +237,38 @@ async function run() {
     app.delete("/cancel-registration/:id", async (req, res) => {
       const id = req.params.id;
 
-      const result = await participantsCollection.deleteOne({
-        _id: new ObjectId(id),
-      });
-      res.send(result);
+      try {
+        // Step 1: Find the participant first to get campId
+        const participant = await participantsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!participant) {
+          return res.status(404).send({ message: "Participant not found" });
+        }
+
+        const campId = participant.camp_id;
+
+        // Step 2: Delete the participant entry
+        const deleteResult = await participantsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        // Step 3: Decrease participant_count by 1 from camp collection
+        const updateResult = await campCollection.updateOne(
+          { _id: new ObjectId(campId) },
+          { $inc: { participant_count: -1 } }
+        );
+
+        res.send({
+          message: "Registration canceled and camp updated",
+          deleteResult,
+          updateResult,
+        });
+      } catch (error) {
+        console.error("Error in cancel-registration:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
     });
 
     // ✅ Add a new camp
