@@ -2,6 +2,10 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./medical-center-camp-service-key.json");
+
 const app = express();
 const port = process.env.PORT || 3000;
 require("dotenv").config();
@@ -25,6 +29,25 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+const verifyFirebaseToken = async (req, res, next) => {
+  const authHeader = req.headers?.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    console.log("decoded token", decoded);
+    req.decoded = decoded;
+    next();
+  } catch (error) {
+    res.status(401).send({ message: "unauthorized access" });
+  }
+};
 
 async function run() {
   try {
@@ -37,6 +60,16 @@ async function run() {
       .collection("participant");
     const paymentCollection = client.db("medical").collection("payment");
     const feedbackCollection = client.db("medical").collection("feedback");
+
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded?.email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(401).send({ message: "forbidden access" });
+      }
+      next();
+    };
 
     app.post("/users", async (req, res) => {
       try {
@@ -66,7 +99,7 @@ async function run() {
       }
     });
     // ✅ GET /users?email=xyz@gmail.com
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyFirebaseToken, async (req, res) => {
       const email = req.query.email;
       if (!email) {
         return res.status(400).send({ message: "Email query is required" });
@@ -122,7 +155,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/camps/:id", async (req, res) => {
+    app.get("/camps/:id", verifyFirebaseToken, async (req, res) => {
       try {
         const id = req.params.id;
         const camp = await campCollection.findOne({ _id: new ObjectId(id) });
@@ -183,30 +216,34 @@ async function run() {
       }
     });
 
-    app.get("/participant/:participantId", async (req, res) => {
-      const id = req.params.participantId;
+    app.get(
+      "/participant/:participantId",
+      verifyFirebaseToken,
+      async (req, res) => {
+        const id = req.params.participantId;
 
-      if (!ObjectId.isValid(id)) {
-        return res.status(400).send({ error: "Invalid participant ID" });
-      }
-
-      try {
-        const participant = await participantsCollection.findOne({
-          _id: new ObjectId(id),
-        });
-
-        if (!participant) {
-          return res.status(404).send({ error: "Participant not found" });
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ error: "Invalid participant ID" });
         }
 
-        res.send(participant);
-      } catch (err) {
-        console.error("Error fetching participant:", err);
-        res.status(500).send({ error: "Server error" });
-      }
-    });
+        try {
+          const participant = await participantsCollection.findOne({
+            _id: new ObjectId(id),
+          });
 
-    app.get("/registered-camps", async (req, res) => {
+          if (!participant) {
+            return res.status(404).send({ error: "Participant not found" });
+          }
+
+          res.send(participant);
+        } catch (err) {
+          console.error("Error fetching participant:", err);
+          res.status(500).send({ error: "Server error" });
+        }
+      }
+    );
+
+    app.get("/registered-camps", verifyAdmin, verifyFirebaseToken, async (req, res) => {
       const campName = req.query.camp_name?.toLowerCase() || "";
       const query = campName
         ? { camp_name: { $regex: campName, $options: "i" } }
@@ -215,7 +252,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/participants", async (req, res) => {
+    app.get("/participants", verifyFirebaseToken, async (req, res) => {
       const email = req.query.email;
       if (!email) {
         return res.status(400).send({ error: "Email is required" });
@@ -275,7 +312,7 @@ async function run() {
     });
 
     // ✅ Add a new camp
-    app.post("/camps", async (req, res) => {
+    app.post("/camps", verifyAdmin, async (req, res) => {
       try {
         const camp = req.body;
 
@@ -304,7 +341,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/update-camp/:id", async (req, res) => {
+    app.patch("/update-camp/:id",verifyAdmin, async (req, res) => {
       const campId = req.params.id;
       const updatedData = req.body;
 
@@ -413,7 +450,7 @@ async function run() {
     });
 
     // server-side (Node.js + Express)
-    app.get("/admin-stats", async (req, res) => {
+    app.get("/admin-stats",verifyAdmin, verifyFirebaseToken, async (req, res) => {
       const totalCamps = await campCollection.estimatedDocumentCount();
       const totalParticipants =
         await participantsCollection.estimatedDocumentCount();
@@ -440,7 +477,7 @@ async function run() {
 
     // Add this in your Express backend route file
 
-    app.get("/user-stats", async (req, res) => {
+    app.get("/user-stats", verifyFirebaseToken, async (req, res) => {
       try {
         const email = req.query.email;
 
@@ -453,7 +490,6 @@ async function run() {
           participant_email: email,
           confirmation_status: "Confirmed",
         });
-       
 
         res.send({
           totalRegisteredCamps,
