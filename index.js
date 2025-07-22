@@ -2,9 +2,11 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
-const admin = require("firebase-admin");
+// const admin = require("firebase-admin");
 
-const serviceAccount = require("./medical-center-camp-service-key.json");
+// const serviceAccount = require("./medical-center-camp-service-key.json");
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -12,8 +14,33 @@ require("dotenv").config();
 const stripe = require("stripe")(`${process.env.STRIPE_SECRET_KEY}`);
 
 // middleware
-app.use(cors());
 app.use(express.json());
+
+app.use(
+  cors({
+    origin: ["http://localhost:5173"],
+    credentials: true,
+  })
+);
+const verifyJWT = (req, res, next) => {
+  const authHeader = req?.headers?.authorization;
+  console.log(authHeader)
+  if (!authHeader) {
+    return res.status(401).send("Unauthorized access");
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  jwt.verify(token, process.env.JWT_SECRET_KEY, (error, decoded) => {
+    if (error) {
+      return res.status(403).send({
+        message: "forbidden access",
+      });
+    }
+    req.decoded = decoded;
+    next();
+  });
+};
 
 app.get("/", (req, res) => {
   res.send("Medical camp server is cooking");
@@ -29,25 +56,6 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
-
-const verifyFirebaseToken = async (req, res, next) => {
-  const authHeader = req.headers?.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).send({ message: "unauthorized access" });
-  }
-  const token = authHeader.split(" ")[1];
-  try {
-    const decoded = await admin.auth().verifyIdToken(token);
-    console.log("decoded token", decoded);
-    req.decoded = decoded;
-    next();
-  } catch (error) {
-    res.status(401).send({ message: "unauthorized access" });
-  }
-};
 
 async function run() {
   try {
@@ -70,6 +78,15 @@ async function run() {
       }
       next();
     };
+
+    // Json web token
+    app.post("/jwt", (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, process.env.JWT_SECRET_KEY, {
+        expiresIn: "7D",
+      });
+      res.send({ token });
+    });
 
     app.post("/users", async (req, res) => {
       try {
@@ -99,12 +116,11 @@ async function run() {
       }
     });
     // ✅ GET /users?email=xyz@gmail.com
-    app.get("/users", verifyFirebaseToken, async (req, res) => {
+    app.get("/users", verifyJWT, async (req, res) => {
       const email = req.query.email;
       if (!email) {
         return res.status(400).send({ message: "Email query is required" });
       }
-
       try {
         const user = await usersCollection.findOne({ email });
         if (!user) {
@@ -114,6 +130,27 @@ async function run() {
       } catch (error) {
         console.error("Error fetching user:", error);
         res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.get("/users/role",verifyJWT, async (req, res) => {
+      const email = req.query.email;
+
+      try {
+        if (!email) {
+          return res.status(400).send({ message: "Email is required." });
+        }
+
+        const user = await usersCollection.findOne({ email });
+
+        if (!user) {
+          return res.status(404).send({ message: "User not found." });
+        }
+
+        res.send({ role: user.role || "user" }); // default to "user" if role missing
+      } catch (error) {
+        console.error("Error getting role:", error);
+        res.status(500).send({ message: "Failed to fetch user role." });
       }
     });
 
@@ -142,7 +179,7 @@ async function run() {
       }
     });
 
-    app.get("/camps", async (req, res) => {
+    app.get("/camps", verifyJWT, async (req, res) => {
       const search = req.query.search?.toLowerCase() || "";
       const query = {
         $or: [
@@ -155,7 +192,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/camps/:id", verifyFirebaseToken, async (req, res) => {
+    app.get("/camps/:id", verifyJWT, async (req, res) => {
       try {
         const id = req.params.id;
         const camp = await campCollection.findOne({ _id: new ObjectId(id) });
@@ -216,34 +253,30 @@ async function run() {
       }
     });
 
-    app.get(
-      "/participant/:participantId",
-      verifyFirebaseToken,
-      async (req, res) => {
-        const id = req.params.participantId;
+    app.get("/participant/:participantId",verifyJWT, async (req, res) => {
+      const id = req.params.participantId;
 
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).send({ error: "Invalid participant ID" });
-        }
-
-        try {
-          const participant = await participantsCollection.findOne({
-            _id: new ObjectId(id),
-          });
-
-          if (!participant) {
-            return res.status(404).send({ error: "Participant not found" });
-          }
-
-          res.send(participant);
-        } catch (err) {
-          console.error("Error fetching participant:", err);
-          res.status(500).send({ error: "Server error" });
-        }
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ error: "Invalid participant ID" });
       }
-    );
 
-    app.get("/registered-camps", verifyAdmin, verifyFirebaseToken, async (req, res) => {
+      try {
+        const participant = await participantsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!participant) {
+          return res.status(404).send({ error: "Participant not found" });
+        }
+
+        res.send(participant);
+      } catch (err) {
+        console.error("Error fetching participant:", err);
+        res.status(500).send({ error: "Server error" });
+      }
+    });
+
+    app.get("/registered-camps",verifyJWT,verifyAdmin, async (req, res) => {
       const campName = req.query.camp_name?.toLowerCase() || "";
       const query = campName
         ? { camp_name: { $regex: campName, $options: "i" } }
@@ -252,7 +285,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/participants", verifyFirebaseToken, async (req, res) => {
+    app.get("/participants",verifyJWT, async (req, res) => {
       const email = req.query.email;
       if (!email) {
         return res.status(400).send({ error: "Email is required" });
@@ -312,7 +345,7 @@ async function run() {
     });
 
     // ✅ Add a new camp
-    app.post("/camps", verifyAdmin, async (req, res) => {
+    app.post("/camps",verifyAdmin, async (req, res) => {
       try {
         const camp = req.body;
 
@@ -450,7 +483,7 @@ async function run() {
     });
 
     // server-side (Node.js + Express)
-    app.get("/admin-stats",verifyAdmin, verifyFirebaseToken, async (req, res) => {
+    app.get("/admin-stats",verifyJWT,verifyAdmin, async (req, res) => {
       const totalCamps = await campCollection.estimatedDocumentCount();
       const totalParticipants =
         await participantsCollection.estimatedDocumentCount();
@@ -477,7 +510,7 @@ async function run() {
 
     // Add this in your Express backend route file
 
-    app.get("/user-stats", verifyFirebaseToken, async (req, res) => {
+    app.get("/user-stats",verifyJWT, async (req, res) => {
       try {
         const email = req.query.email;
 
