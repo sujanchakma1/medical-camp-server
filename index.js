@@ -475,6 +475,50 @@ async function run() {
       }
     });
 
+    app.get("/payment-history", async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        if (!email) {
+          return res.status(400).send({ message: "Email is required" });
+        }
+
+        // Step 1: Find all payments for this email
+        const payments = await paymentCollection.find({ email }).toArray();
+
+        // Step 2: Get all participantIds from payment collection
+        const participantIds = payments.map(
+          (p) => new ObjectId(p.participantId)
+        );
+
+        // Step 3: Find matching participants
+        const participants = await participantsCollection
+          .find({ _id: { $in: participantIds } })
+          .toArray();
+
+        // Step 4: Merge participant info with payments
+        const history = payments.map((payment) => {
+          const participant = participants.find(
+            (p) => p._id.toString() === payment.participantId
+          );
+
+          return {
+            transactionId: payment.transactionId,
+            paid_at: payment.paid_at,
+            camp_name: participant?.camp_name || "N/A",
+            camp_fees: participant?.camp_fees || "0",
+            confirmation_status: participant?.confirmation_status || "Pending",
+            payment_status: participant?.payment_status || "Pending",
+          };
+        });
+
+        res.send(history);
+      } catch (error) {
+        console.error("Payment History Error:", error.message);
+        res.status(500).send({ message: "Server Error" });
+      }
+    });
+
     // FeedBack
     app.post("/feedback", async (req, res) => {
       const feedback = req.body;
