@@ -18,13 +18,13 @@ app.use(express.json());
 
 app.use(
   cors({
-    origin: ["http://localhost:5173"],
+    origin: ["https://medical-center-camp.web.app", "http://localhost:5173"],
     credentials: true,
   })
 );
 const verifyJWT = (req, res, next) => {
   const authHeader = req?.headers?.authorization;
-  console.log(authHeader)
+  console.log(authHeader);
   if (!authHeader) {
     return res.status(401).send("Unauthorized access");
   }
@@ -68,6 +68,7 @@ async function run() {
       .collection("participant");
     const paymentCollection = client.db("medical").collection("payment");
     const feedbackCollection = client.db("medical").collection("feedback");
+    const volunteersCollection = client.db("medical").collection("volunteer");
 
     const verifyAdmin = async (req, res, next) => {
       const email = req.decoded?.email;
@@ -133,7 +134,7 @@ async function run() {
       }
     });
 
-    app.get("/users/role",verifyJWT, async (req, res) => {
+    app.get("/users/role", verifyJWT, async (req, res) => {
       const email = req.query.email;
 
       try {
@@ -179,7 +180,7 @@ async function run() {
       }
     });
 
-    app.get("/camps", verifyJWT, async (req, res) => {
+    app.get("/camps", async (req, res) => {
       const search = req.query.search?.toLowerCase() || "";
       const query = {
         $or: [
@@ -253,7 +254,7 @@ async function run() {
       }
     });
 
-    app.get("/participant/:participantId",verifyJWT, async (req, res) => {
+    app.get("/participant/:participantId", verifyJWT, async (req, res) => {
       const id = req.params.participantId;
 
       if (!ObjectId.isValid(id)) {
@@ -276,7 +277,7 @@ async function run() {
       }
     });
 
-    app.get("/registered-camps",verifyJWT,verifyAdmin, async (req, res) => {
+    app.get("/registered-camps", verifyJWT, verifyAdmin, async (req, res) => {
       const campName = req.query.camp_name?.toLowerCase() || "";
       const query = campName
         ? { camp_name: { $regex: campName, $options: "i" } }
@@ -285,15 +286,27 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/participants",verifyJWT, async (req, res) => {
-      const email = req.query.email;
+    app.get("/participants", async (req, res) => {
+      const { email, search } = req.query;
       if (!email) {
-        return res.status(400).send({ error: "Email is required" });
+        return res.status(400).send({ error: "Email required" });
       }
-      const result = await participantsCollection
-        .find({ participant_email: email })
-        .toArray();
-      res.send(result);
+
+      const query = { participant_email: email };
+
+      if (search) {
+        const regex = new RegExp(search, "i"); // case-insensitive search
+        query.$or = [
+          { camp_name: regex },
+          { confirmation_status: regex },
+          { payment_status: regex },
+          { healthcare_professional: regex }, // যদি থাকে
+          { date: regex }, // যদি স্ট্রিং ডেটা থাকে, না হলে আলাদা হ্যান্ডেল করতে হবে
+        ];
+      }
+
+      const camps = await participantsCollection.find(query).toArray();
+      res.send(camps);
     });
 
     app.patch("/confirm-registration/:id", async (req, res) => {
@@ -345,7 +358,7 @@ async function run() {
     });
 
     // ✅ Add a new camp
-    app.post("/camps",verifyAdmin, async (req, res) => {
+    app.post("/camps", verifyAdmin, async (req, res) => {
       try {
         const camp = req.body;
 
@@ -374,7 +387,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/update-camp/:id",verifyAdmin, async (req, res) => {
+    app.patch("/update-camp/:id", verifyAdmin, async (req, res) => {
       const campId = req.params.id;
       const updatedData = req.body;
 
@@ -483,7 +496,7 @@ async function run() {
     });
 
     // server-side (Node.js + Express)
-    app.get("/admin-stats",verifyJWT,verifyAdmin, async (req, res) => {
+    app.get("/admin-stats", verifyJWT, verifyAdmin, async (req, res) => {
       const totalCamps = await campCollection.estimatedDocumentCount();
       const totalParticipants =
         await participantsCollection.estimatedDocumentCount();
@@ -510,7 +523,7 @@ async function run() {
 
     // Add this in your Express backend route file
 
-    app.get("/user-stats",verifyJWT, async (req, res) => {
+    app.get("/user-stats", verifyJWT, async (req, res) => {
       try {
         const email = req.query.email;
 
@@ -535,8 +548,40 @@ async function run() {
       }
     });
 
+    // Volunteers collection CRUD
+
+    // Get all volunteers
+    app.get("/volunteers", async (req, res) => {
+      const volunteers = await volunteersCollection.find().toArray();
+      res.send(volunteers);
+    });
+
+    // Add new volunteer
+    app.post("/volunteers", async (req, res) => {
+      const { name, contact, role, availability } = req.body;
+      if (!name || !contact || !role || !availability) {
+        return res.status(400).send({ error: "All fields required" });
+      }
+      const result = await volunteersCollection.insertOne({
+        name,
+        contact,
+        role,
+        availability,
+      });
+      res.send(result);
+    });
+
+    // Delete volunteer
+    app.delete("/volunteers/:id", async (req, res) => {
+      const { id } = req.params;
+      const result = await volunteersCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
