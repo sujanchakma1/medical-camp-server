@@ -557,18 +557,20 @@ async function run() {
       }
     });
 
- 
-
-    app.get("/overview-stats",verifyJWT, async (req, res) => {
+    app.get("/overview-stats", async (req, res) => {
       try {
         const totalCamps = await campCollection.countDocuments();
         const totalParticipants = await participantsCollection.countDocuments();
+
         const payments = await paymentCollection.find().toArray();
 
         const totalPayments = payments.reduce(
-          (sum, item) => sum + parseFloat(item.amount),
+          (sum, item) => sum + Number(item.amount || 0),
           0
         );
+        console.log(totalCamps,
+          totalParticipants,
+          totalPayments,)
 
         res.json({
           totalCamps,
@@ -576,6 +578,7 @@ async function run() {
           totalPayments,
         });
       } catch (error) {
+        console.error("Overview Stats Error:", error);
         res.status(500).json({ message: "Failed to fetch overview stats" });
       }
     });
