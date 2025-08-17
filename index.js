@@ -30,6 +30,7 @@ const verifyJWT = (req, res, next) => {
   }
 
   const token = authHeader.split(" ")[1];
+  console.log(token);
 
   jwt.verify(token, process.env.JWT_SECRET_KEY, (error, decoded) => {
     if (error) {
@@ -75,7 +76,7 @@ async function run() {
       const query = { email };
       const user = await usersCollection.findOne(query);
       if (!user || user.role !== "admin") {
-        return res.status(401).send({ message: "forbidden access" });
+        return res.status(403).send({ message: "forbidden access" });
       }
       next();
     };
@@ -219,6 +220,23 @@ async function run() {
       } catch (error) {
         console.error("Error fetching popular camps:", error);
         res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // Recent 6 Camps Route
+    app.get("/recent-camps", async (req, res) => {
+      try {
+        const recentCamps = await campCollection
+          .find()
+          .sort({ date_time: -1 }) // newest first
+          .limit(6)
+          .toArray();
+
+        res.send(recentCamps);
+      } catch (error) {
+        res
+          .status(500)
+          .send({ message: "Failed to fetch recent camps", error });
       }
     });
 
@@ -539,56 +557,26 @@ async function run() {
       }
     });
 
-    // server-side (Node.js + Express)
-    app.get("/admin-stats", verifyJWT, verifyAdmin, async (req, res) => {
-      const totalCamps = await campCollection.estimatedDocumentCount();
-      const totalParticipants =
-        await participantsCollection.estimatedDocumentCount();
-      const payments = await paymentCollection.find().toArray();
+ 
 
-      const totalPayments = payments.reduce(
-        (sum, item) => sum + parseFloat(item.amount),
-        0
-      );
-
-      const recentParticipants = await participantsCollection
-        .find({})
-        .sort({ date: -1 })
-        .limit(5)
-        .toArray();
-
-      res.send({
-        totalCamps,
-        totalParticipants,
-        totalPayments,
-        recentParticipants,
-      });
-    });
-
-    // Add this in your Express backend route file
-
-    app.get("/user-stats", verifyJWT, async (req, res) => {
+    app.get("/overview-stats",verifyJWT, async (req, res) => {
       try {
-        const email = req.query.email;
+        const totalCamps = await campCollection.countDocuments();
+        const totalParticipants = await participantsCollection.countDocuments();
+        const payments = await paymentCollection.find().toArray();
 
-        const totalRegisteredCamps =
-          await participantsCollection.countDocuments({
-            participant_email: email,
-          });
+        const totalPayments = payments.reduce(
+          (sum, item) => sum + parseFloat(item.amount),
+          0
+        );
 
-        const confirmedCamps = await participantsCollection.countDocuments({
-          participant_email: email,
-          confirmation_status: "Confirmed",
+        res.json({
+          totalCamps,
+          totalParticipants,
+          totalPayments,
         });
-
-        res.send({
-          totalRegisteredCamps,
-          confirmedCamps,
-        });
-      } catch (err) {
-        res
-          .status(500)
-          .send({ message: "Failed to load user stats", error: err });
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch overview stats" });
       }
     });
 
